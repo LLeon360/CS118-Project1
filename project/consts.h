@@ -50,7 +50,7 @@ typedef struct {
 // Bit counter
 static inline int bit_count(packet* pkt) {
     uint8_t* bytes = (uint8_t*) pkt;
-    int len = sizeof(packet) + ntohs(pkt->length);
+    int len = sizeof(packet) + MIN(MAX_PAYLOAD, ntohs(pkt->length));
     int count = 0;
 
     for (int i = 0; i < len; i++) {
