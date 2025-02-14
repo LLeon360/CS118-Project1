@@ -205,8 +205,7 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
 
 void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                  ssize_t (*input_p)(uint8_t *, size_t), void (*output_p)(uint8_t *, size_t),
-                 int need_to_ack, int next_expected_packet, int cur_win,
-                 int cur_seq) {
+                 int need_to_ack, int next_expected_packet, int cur_win, int cur_seq) {
     // This is the normal loop after the handshake
     // You can use this to send and receive packets
     // The handshake code is in listen_loop()
@@ -334,7 +333,9 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         }
 
         // Check if there is anything to read since recvfrom is nonblocking
-        while (true) {
+
+        // make sure there is enough space
+        while (!ooo_buffer_is_full(recv_buffer)) { 
             // Receive a packet
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
             packet *p = (packet *)&buf;
@@ -355,7 +356,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // valid len, valid window, parity)
                 if (basic_packet_validation(p, 0, 0)) {
                     // Check if the packet is in order
-                    // If packet is exactly what we're expecting, output immediately    
+                    // If packet is exactly what we're expecting, output immediately
                     int pkt_seq = ntohs(p->seq);
                     int pkt_len = ntohs(p->length);
 
@@ -371,7 +372,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                                 dup_acks++;
                             }
                             else {
-                                // new ACK 
+                                // new ACK
                                 dup_acks = 1;
                             }
                             if (dup_acks > 3) {
@@ -401,25 +402,22 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                             // reset the retransmission timer
                             gettimeofday(&send_time_of_earliest_packet, NULL);
                         }
+                    }
 
-                        if (pkt_seq == next_expected_packet) {
-                            output_io(p->payload, pkt_len);
-                            next_expected_packet += pkt_len;
-                            ooo_buffer_flush(recv_buffer, &next_expected_packet, output_io);
-                        }
-                        else if (pkt_seq > next_expected_packet &&
-                                 pkt_seq < next_expected_packet + MAX_WINDOW) {
-                            if (ooo_buffer_is_full(recv_buffer)) {
-                                // Receiver window is full, break the loop
-                                break;
-                            }
-                            ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
-                        }
+                    if (pkt_seq == next_expected_packet) {
+                        output_io(p->payload, pkt_len);
+                        next_expected_packet += pkt_len;
+                        ooo_buffer_flush(recv_buffer, &next_expected_packet, output_io);
+                    }
+                    else if (pkt_seq > next_expected_packet &&
+                             pkt_seq < next_expected_packet + MAX_WINDOW) {
+                        // make sure the packet is within our receiver window
+                        ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
                     }
                 }
             }
         }
-    
+
         // Check if the retransmission timer has expired
         struct timeval current_time;
         gettimeofday(&current_time, NULL);
