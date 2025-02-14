@@ -307,28 +307,26 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 enqueue_sender_window(&sender_window, p);
             }
         }
-        else {
-            // since we can no longer bundle acks with data, we need to send a packet with just the
-            // ACK, these don't need to be buffered up
-            while (acks_queued.count > 0) {
-                // Create the packet
-                char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
-                packet *p = (packet *)&buf;
-                p->seq = htons(cur_seq);
-                p->ack = htons(dequeue_ack(&acks_queued));
-                p->flags |= ACK;
-                p->length = 0;
-                p->win = htons(cur_win);
-                if ((bit_count(p) & 1) == 1) {
-                    p->flags |= PARITY; // set the parity bit
-                }
+        // since we can no longer bundle acks with data, we need to send a packet with just the
+        // ACK, these don't need to be buffered up
+        while (acks_queued.count > 0) {
+            // Create the packet
+            char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
+            packet *p = (packet *)&buf;
+            p->seq = htons(cur_seq);
+            p->ack = htons(dequeue_ack(&acks_queued));
+            p->flags |= ACK;
+            p->length = 0;
+            p->win = htons(cur_win);
+            if ((bit_count(p) & 1) == 1) {
+                p->flags |= PARITY; // set the parity bit
+            }
 
-                // Send the packet
-                if (sendto(sockfd, p, sizeof(packet), 0, (struct sockaddr *)addr,
-                           sizeof(struct sockaddr)) < 0) {
-                    fprintf(stderr, "Error sending packet\n");
-                    return errno;
-                }
+            // Send the packet
+            if (sendto(sockfd, p, sizeof(packet), 0, (struct sockaddr *)addr,
+                        sizeof(struct sockaddr)) < 0) {
+                fprintf(stderr, "Error sending packet\n");
+                return errno;
             }
         }
 
