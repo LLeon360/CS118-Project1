@@ -58,7 +58,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_synack->seq) + 1;
                     flow_window_size = ntohs(twh_synack->win);
                     
-                    output_io(twh_synack->payload, twh_synack->length);
+                    output_io(twh_synack->payload, ntohs(twh_synack->length));
 
                     break;
                 }
@@ -116,7 +116,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_syn->seq) + 1;
                     flow_window_size = ntohs(twh_syn->win);
                     
-                    output_io(twh_syn->payload, twh_syn->length);
+                    output_io(twh_syn->payload, ntohs(twh_syn->length));
 
                     break;
                 }
@@ -166,7 +166,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_ack->seq) + 1;
                     flow_window_size = ntohs(twh_ack->win);
                     
-                    output_io(twh_ack->payload, twh_ack->length);
+                    output_io(twh_ack->payload, ntohs(twh_ack->length));
 
                     break;
                 }
