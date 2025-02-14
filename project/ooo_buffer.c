@@ -31,6 +31,7 @@ void ooo_buffer_destroy(ooo_buffer* buf) {
     free(buf);
 }
 
+// !!! expects length to already be ntohs(p->length) NOT raw p->length
 void ooo_buffer_store(ooo_buffer* buf, int seq, int length, uint8_t *payload) {
     // Check for duplicate entry, if found, do nothing.
     for (int i = 0; i < buf->capacity; i++) {
