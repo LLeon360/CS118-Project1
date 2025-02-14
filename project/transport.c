@@ -17,17 +17,16 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // Phase 1: Establish SYN
 
         // Create the SYN packet
-        int seq_num = 0; // Anything under 1000 is fine
+        int seq_num = 17; // Anything under 1000 is fine
         char twh_syn_buf[sizeof(packet) + MAX_PAYLOAD] = {0}; 
         packet* twh_syn = (packet*) &twh_syn_buf; 
         size_t twh_syn_data_len = input_io(twh_syn->payload, MAX_PAYLOAD);
-        // Can treat the last byte of data as the 0 seq number
         twh_syn->seq = htons(seq_num);
         // Don't need to set twh_syn->ack
         twh_syn->length = htons(twh_syn_data_len);
         twh_syn->win = htons(MAX_WINDOW);
         twh_syn->flags = SYN;
-        if (bit_count(twh_syn) & 1 == 1) {
+        if ((bit_count(twh_syn) & 1) == 1) {
             twh_syn->flags |= PARITY;
         }
         
@@ -53,9 +52,9 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
             if (bytes_recvd > 0) {
                 // Check flags, ack, parity
-                if ((twh_synack->flags & SYN == 1) && (twh_synack->flags & ACK == 1)
+                if (((twh_synack->flags & SYN) == SYN) && ((twh_synack->flags & ACK) == ACK)
                         && (ntohs(twh_synack->ack) == seq_num + 1)
-                        && (bit_count(twh_synack) & 1 == 0)) {
+                        && ((bit_count(twh_synack) & 1) == 0)) {
                     ack_num = ntohs(twh_synack->seq) + 1;
                     flow_window_size = ntohs(twh_synack->win);
                     
@@ -72,16 +71,14 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         char twh_ack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet* twh_ack = (packet*) &twh_ack_buf; 
         size_t twh_ack_data_len = input_io(twh_ack->payload, MAX_PAYLOAD);
-        seq_num += twh_syn_data_len;
-        if (twh_syn_data_len == 0) {
-            seq_num += 1;
-        }
+        // See the three way handshake description on the spec
+        seq_num = (twh_syn_data_len == 0) ? 0 : seq_num + 1;
         twh_ack->seq = htons(seq_num);
         twh_ack->ack = htons(ack_num);
         twh_ack->length = htons(twh_ack_data_len);
         twh_ack->win = htons(MAX_WINDOW);
         twh_ack->flags = ACK;
-        if (bit_count(twh_ack) & 1 == 1) {
+        if ((bit_count(twh_ack) & 1) == 1) {
             twh_ack->flags |= PARITY;
         }
         
@@ -115,7 +112,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
             if (bytes_recvd > 0) {
                 // Check flags and parity
-                if ((twh_syn->flags & SYN == 1) && (twh_syn->flags & ACK == 0) && (bit_count(twh_syn) & 1 == 0)) {
+                if (((twh_syn->flags & SYN) == SYN) && ((twh_syn->flags & ACK) == 0) && ((bit_count(twh_syn) & 1) == 0)) {
                     ack_num = ntohs(twh_syn->seq) + 1;
                     flow_window_size = ntohs(twh_syn->win);
                     
@@ -133,13 +130,12 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         char twh_synack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet* twh_synack = (packet*) &twh_synack_buf;
         size_t twh_synack_data_len = input_io(twh_synack->payload, MAX_PAYLOAD);
-        // Can treat the last byte of data as the 0 seq number
         twh_synack->seq = htons(seq_num);
         twh_synack->ack = htons(ack_num);
         twh_synack->length = htons(twh_synack_data_len);
         twh_synack->win = htons(MAX_WINDOW);
         twh_synack->flags = SYN | ACK;
-        if (bit_count(twh_synack) & 1 == 1) {
+        if ((bit_count(twh_synack) & 1) == 1) {
             twh_synack->flags |= PARITY;
         }
         
@@ -163,7 +159,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
             if (bytes_recvd > 0) {
                 // Check flags, ack, basic validation
-                if ((twh_ack->flags & SYN == 0) && (twh_ack->flags & ACK == 1)
+                if (((twh_ack->flags & SYN) == 0) && ((twh_ack->flags & ACK) == ACK)
                         && (ntohs(twh_ack->ack) == seq_num + 1)
                         && basic_packet_validation(twh_ack, ack_num, flow_window_size)
                         ) {
@@ -196,12 +192,10 @@ int basic_packet_validation(packet* p, int cur_ack, int cur_win) {
         (ntohs(p->seq) >= cur_ack) && (ntohs(p->seq) < cur_ack + MAX_PAYLOAD - 1)
         // Make sure length is in expected range
         && (ntohs(p->length) <= MAX_PAYLOAD)
-        // Make sure seq and length align
-        && (ntohs(p->seq) == cur_ack - 1 + ntohs(p->length))
         // Make sure window didn't shrink
         // The spec said the window should never shrink
         && (ntohs(p->win) >= cur_win)
         // Check parity
-        && (bit_count(p) & 1 == 0)
+        && ((bit_count(p) & 1) == 0)
         ;
 }
