@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "consts.h"
 #include <errno.h>
+#include <string.h>
 
 // Main function of transport layer; never quits
 void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
@@ -16,17 +17,19 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // Phase 1: Establish SYN
 
         // Create the SYN packet
-        size_t twh_syn_data_len = 0; // FILL WITH REAL DATA LATER
         int seq_num = 0; // Anything under 1000 is fine
         char twh_syn_buf[sizeof(packet) + MAX_PAYLOAD] = {0}; 
         packet* twh_syn = (packet*) &twh_syn_buf; 
+        size_t twh_syn_data_len = input_io(twh_syn->payload, MAX_PAYLOAD);
+        // Can treat the last byte of data as the 0 seq number
         twh_syn->seq = htons(seq_num);
         // Don't need to set twh_syn->ack
         twh_syn->length = htons(twh_syn_data_len);
         twh_syn->win = htons(MAX_WINDOW);
         twh_syn->flags = SYN;
-        // COME BACK AND SET PARITY BIT, DATA FIELD
-        seq_num = seq_num + twh_syn_data_len;
+        if (bit_count(twh_syn) & 1 == 1) {
+            twh_syn->flags |= PARITY;
+        }
         
         // Send the SYN (Omar says we can assume the handshakes are never dropped)
         if (sendto(sockfd, twh_syn, sizeof(packet) + twh_syn_data_len, 0, 
@@ -56,7 +59,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_synack->seq) + 1;
                     flow_window_size = ntohs(twh_synack->win);
                     
-                    // CHECK DATA LATER
+                    output_io(twh_synack->payload, twh_synack->length);
 
                     break;
                 }
@@ -66,16 +69,21 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // Phase 3: Send ACK
 
         // Create the ACK packet
-        size_t twh_ack_data_len = 0; // FILL WITH REAL DATA LATER
         char twh_ack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet* twh_ack = (packet*) &twh_ack_buf; 
+        size_t twh_ack_data_len = input_io(twh_ack->payload, MAX_PAYLOAD);
+        seq_num += twh_syn_data_len;
+        if (twh_syn_data_len == 0) {
+            seq_num += 1;
+        }
         twh_ack->seq = htons(seq_num);
         twh_ack->ack = htons(ack_num);
         twh_ack->length = htons(twh_ack_data_len);
         twh_ack->win = htons(MAX_WINDOW);
         twh_ack->flags = ACK;
-        // COME BACK AND SET PARITY BIT, DATA FIELD
-        seq_num = seq_num + twh_syn_data_len;
+        if (bit_count(twh_ack) & 1 == 1) {
+            twh_ack->flags |= PARITY;
+        }
         
         // Send the ACK (Omar says we can assume the handshakes are never dropped)
         if (sendto(sockfd, twh_ack, sizeof(packet) + twh_ack_data_len, 0, 
@@ -111,7 +119,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_syn->seq) + 1;
                     flow_window_size = ntohs(twh_syn->win);
                     
-                    // CHECK DATA LATER
+                    output_io(twh_syn->payload, twh_syn->length);
 
                     break;
                 }
@@ -122,15 +130,18 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         // Create the SYN ACK packet
         int seq_num = 1000; // Anything under 1000 is fine, making it different from client to make debugging easier
-        size_t twh_synack_data_len = 0; // FILL WITH REAL DATA LATER
         char twh_synack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
-        packet* twh_synack = (packet*) &twh_synack_buf; 
+        packet* twh_synack = (packet*) &twh_synack_buf;
+        size_t twh_synack_data_len = input_io(twh_synack->payload, MAX_PAYLOAD);
+        // Can treat the last byte of data as the 0 seq number
         twh_synack->seq = htons(seq_num);
         twh_synack->ack = htons(ack_num);
         twh_synack->length = htons(twh_synack_data_len);
         twh_synack->win = htons(MAX_WINDOW);
         twh_synack->flags = SYN | ACK;
-        // COME BACK AND SET PARITY BIT, DATA FIELD
+        if (bit_count(twh_synack) & 1 == 1) {
+            twh_synack->flags |= PARITY;
+        }
         
         // Send the SYN ACK (Omar says we can assume the handshakes are never dropped)
         if (sendto(sockfd, twh_synack, sizeof(packet) + twh_synack_data_len, 0, 
@@ -159,7 +170,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     ack_num = ntohs(twh_ack->seq) + 1;
                     flow_window_size = ntohs(twh_ack->win);
                     
-                    // CHECK DATA LATER
+                    output_io(twh_ack->payload, twh_ack->length);
 
                     break;
                 }
@@ -183,6 +194,8 @@ int basic_packet_validation(packet* p, int cur_ack, int cur_win) {
     return 
         // Make sure seq is in expected range
         (ntohs(p->seq) >= cur_ack) && (ntohs(p->seq) < cur_ack + MAX_PAYLOAD - 1)
+        // Make sure length is in expected range
+        && (ntohs(p->length) <= MAX_PAYLOAD)
         // Make sure seq and length align
         && (ntohs(p->seq) == cur_ack - 1 + ntohs(p->length))
         // Make sure window didn't shrink
