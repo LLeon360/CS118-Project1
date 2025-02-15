@@ -61,8 +61,8 @@ int ooo_buffer_flush(ooo_buffer* buf, int *next_expected, void (*output_io)(uint
         for (int i = 0; i < buf->capacity; i++) {
             if (buf->entries[i].valid && buf->entries[i].seq == *next_expected) {
                 output_io(buf->entries[i].payload, buf->entries[i].length);
-                *next_expected += buf->entries[i].length;
-                total_flushed += buf->entries[i].length;
+                *next_expected += 1;
+                total_flushed += 1;
                 free(buf->entries[i].payload);
                 buf->entries[i].payload = NULL;
                 buf->entries[i].valid = 0;

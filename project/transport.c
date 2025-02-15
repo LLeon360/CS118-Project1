@@ -186,10 +186,8 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                     output_io(twh_ack->payload, ntohs(twh_ack->length));
 
                     if (ntohs(twh_ack->length) > 0) {
-                        // if the length is greater than 0, we need to ack the payload
                         need_to_ack_val = ntohs(twh_ack->seq) + 1;
                     }
-                    need_to_ack_val = ntohs(twh_ack->seq) + ntohs(twh_ack->length);
                     break;
                 }
             }
@@ -406,14 +404,18 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
 
                     if (pkt_seq == next_expected_packet) {
                         output_io(p->payload, pkt_len);
-                        next_expected_packet += pkt_len;
+                        next_expected_packet += 1;
                         ooo_buffer_flush(recv_buffer, &next_expected_packet, output_io);
                     }
                     else if (pkt_seq > next_expected_packet &&
-                             pkt_seq < next_expected_packet + MAX_WINDOW) {
+                             pkt_seq < next_expected_packet + MAX_WINDOW_COUNT) {
                         // make sure the packet is within our receiver window
                         ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
                     }
+                    
+                    // for the in order case, this will be what in expects (after flushing all the in order packets, ie the next missing packet in order)
+                    // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
+                    enqueue_ack(&acks_queued, next_expected_packet);
                 }
             }
         }
