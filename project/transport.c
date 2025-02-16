@@ -33,6 +33,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         packet *twh_syn = (packet *)&twh_syn_buf;
         size_t twh_syn_data_len = input_io(twh_syn->payload, MAX_PAYLOAD);
         twh_syn->seq = htons(seq_num);
+        seq_num++;
         // Don't need to set twh_syn->ack
         twh_syn->length = htons(twh_syn_data_len);
         twh_syn->win = htons(MAX_WINDOW);
@@ -65,7 +66,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
             if (bytes_recvd > 0) {
                 // Check flags, ack, parity
                 if (((twh_synack->flags & SYN) == SYN) && ((twh_synack->flags & ACK) == ACK) &&
-                    (ntohs(twh_synack->ack) == seq_num + 1) && ((bit_count(twh_synack) & 1) == 0)) {
+                    (ntohs(twh_synack->ack) == seq_num) && ((bit_count(twh_synack) & 1) == 0)) {
                     ack_num = ntohs(twh_synack->seq) + 1;
                     flow_window_size = ntohs(twh_synack->win);
 
@@ -83,7 +84,8 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         packet *twh_ack = (packet *)&twh_ack_buf;
         size_t twh_ack_data_len = input_io(twh_ack->payload, MAX_PAYLOAD);
         // See the three way handshake description on the spec
-        seq_num = (twh_syn_data_len == 0) ? 0 : seq_num + 1;
+        // Already added one before to seq_num
+        seq_num = (twh_syn_data_len == 0) ? 0 : seq_num;
         twh_ack->seq = htons(seq_num);
         seq_num++;
         twh_ack->ack = htons(ack_num);
@@ -182,7 +184,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
             if (bytes_recvd > 0) {
                 // Check flags, ack, basic validation
                 if (((twh_ack->flags & SYN) == 0) && ((twh_ack->flags & ACK) == ACK) &&
-                    (ntohs(twh_ack->ack) == seq_num + 1) &&
+                    (ntohs(twh_ack->ack) == seq_num) &&
                     basic_packet_validation(twh_ack, ack_num, flow_window_size)) {
                     ack_num = ntohs(twh_ack->seq) + 1;
                     flow_window_size = ntohs(twh_ack->win);
@@ -289,6 +291,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 p->flags |= PARITY; // set the parity bit
             }
 
+            fprintf(stderr, "User %d is sending packet number %d\n", type, cur_seq);
             // Send the packet
             if (sendto(sockfd, p, sizeof(packet) + data_len, 0, (struct sockaddr *)addr,
                         sizeof(struct sockaddr)) < 0) {
@@ -344,13 +347,14 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         if (bytes_recvd > 0) {
             // do basic validation on the packet for (seq in range (no order check in this),
             // valid len, valid window, parity)
+            fprintf(stderr, "User %d got a packet\n", type);
             if (basic_packet_validation(p, cur_ack, cur_win)) {
                 // if packet has the ACK flag, must handle that, logic is separate from handling data
                 if (p->flags & ACK) {
                     // check if the ACK is in the sender window
                     int ack_num = ntohs(p->ack);
 
-                    if (ack_num <= peek_sender_window(sender_window)->seq) {
+                    if ((peek_sender_window(sender_window) != NULL) && (ack_num <= peek_sender_window(sender_window)->seq)) {
                         if (ack_num == last_dup_ack) {
                             // duplicate ACK
                             dup_acks++;
@@ -364,9 +368,9 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                             // handle duplicate ACK
                             // resend the first packet in the sender window
                             packet *sent_pkt = peek_sender_window(sender_window);
-                            if (sendto(sockfd, sent_pkt,
+                            if ((sent_pkt != NULL) && (sendto(sockfd, sent_pkt,
                                         sizeof(packet) + ntohs(sent_pkt->length), 0,
-                                        (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
+                                        (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0)) {
                                 fprintf(stderr, "Error resending packet\n");
                                 return errno;
                             }
@@ -378,7 +382,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                         last_dup_ack = ack_num;
 
                         // Remove packets with a SEQ number less than the received ACK number from our sender window
-                        while (ack_num > peek_sender_window(sender_window)->seq) {
+                        while ((peek_sender_window(sender_window) != NULL) && (ack_num > peek_sender_window(sender_window)->seq)) {
                             packet *sent_pkt = dequeue_sender_window(sender_window);
                             if (ntohs(sent_pkt->seq) == ack_num) {
                                 free(sent_pkt);
@@ -397,6 +401,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // Handle data in packet
                 int pkt_seq = ntohs(p->seq);
                 int pkt_len = ntohs(p->length);
+
+                fprintf(stderr, "User %d received SEQ %d, expecting SEQ %d\n", type, pkt_seq, cur_ack);
 
                 // If packet is exactly what we're expecting, output immediately
                 if (pkt_seq == cur_ack) {
@@ -418,9 +424,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 enqueue_ack(acks_queued, cur_ack);
             }
         }
-        else {
-            free(p);
-        }
 
         // Check if the retransmission timer has expired
         struct timeval current_time;
@@ -430,8 +433,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         if (TV_DIFF(current_time, send_time_of_earliest_packet) > 1) {
             // Resend the first packet in the sender window
             packet *sent_pkt = peek_sender_window(sender_window);
-            if (sendto(sockfd, sent_pkt, sizeof(packet) + ntohs(sent_pkt->length), 0,
-                       (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
+            if ((peek_sender_window(sender_window) != NULL) && (sendto(sockfd, sent_pkt, sizeof(packet) + ntohs(sent_pkt->length), 0,
+                       (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0)) {
                 fprintf(stderr, "Error resending packet\n");
                 return errno;
             }
