@@ -32,3 +32,5 @@ void ooo_buffer_store(ooo_buffer* buf, int seq, int length, uint8_t *payload);
 //   update *next_expected, and free that entry.
 // Returns the total number of packets flushed.
 int ooo_buffer_flush(ooo_buffer* buf, int *next_expected);
+
+int ooo_buffer_is_full(ooo_buffer* buf);

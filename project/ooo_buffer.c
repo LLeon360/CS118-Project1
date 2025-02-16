@@ -70,3 +70,12 @@ int ooo_buffer_flush(ooo_buffer* buf, int *next_expected) {
     } while(found);
     return total_flushed;
 }
+
+int ooo_buffer_is_full(ooo_buffer* buf) {
+    int count = 0;
+    for (int i = 0; i < buf->capacity; i++) {
+        if (buf->entries[i].valid)
+            count++;
+    }
+    return count == buf->capacity;
+}

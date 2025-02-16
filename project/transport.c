@@ -3,11 +3,13 @@
 #include "io.h"
 #include "ooo_buffer.h"
 #include "sender_window.h"
+#include "transport.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <sys/time.h>
 
@@ -16,7 +18,7 @@
 #define HEADER_SIZE 16 * 3
 
 // Main function of transport layer; never quits
-void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
+int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                  ssize_t (*input_p)(uint8_t *, size_t), void (*output_p)(uint8_t *, size_t)) {
 
     socklen_t addr_size = sizeof(struct sockaddr_in);
@@ -193,7 +195,7 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
             }
         }
 
-        normal_loop(sockfd, addr, SERVER, input_p, output_p,
+        return normal_loop(sockfd, addr, SERVER, input_p, output_p,
                     /* need_to_ack     = */ need_to_ack_val,
                     /* cur_ack         = */ ack_num,
                     /* cur_win         = */ flow_window_size,
@@ -201,7 +203,7 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
     }
 }
 
-void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
+int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                  ssize_t (*input_p)(uint8_t *, size_t), void (*output_p)(uint8_t *, size_t),
                  int need_to_ack, int cur_ack, int cur_win, int cur_seq) {
     // This is the normal loop after the handshake
@@ -239,10 +241,6 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     // need to store a sender window, for window of packets that are in flight / not acked
     sender_window_queue* sender_window = malloc(sizeof(sender_window_queue));
     init_sender_window_queue(sender_window);
-    // need to store a receiver window, for packets that are in the buffer, received out of order
-    char receiver_window_buf[MAX_WINDOW] = {0};
-    // // way to check if a packet is present in the receiver window (we set 1 at the start of a
-    // packet, 0 otherwise) char receiver_window_present[MAX_WINDOW] = {0};
 
     // Initialize out-of-order table
     ooo_buffer *recv_buffer = ooo_buffer_create(DEFAULT_OUT_OF_ORDER_CAPACITY);
@@ -445,6 +443,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     ooo_buffer_destroy(recv_buffer);
     free(sender_window);
     free(acks_queued);
+    return 0;
 }
 
 // Checks that a few headers look correct
