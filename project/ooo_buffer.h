@@ -27,8 +27,8 @@ void ooo_buffer_destroy(ooo_buffer* buf);
 // If a packet with the same seq already exists, it does nothing.
 void ooo_buffer_store(ooo_buffer* buf, int seq, int length, uint8_t *payload);
 
-// flush contiguous packets starting at *next_expected.
+// Flush contiguous packets starting with seq number *next_expected.
 // For every stored packet with seq matching *next_expected, output its payload,
-// update *next_expected, and free that entry.
-// Returns the total number of bytes flushed.
-int ooo_buffer_flush(ooo_buffer* buf, int *next_expected, void (*output_io)(uint8_t*, size_t));
+//   update *next_expected, and free that entry.
+// Returns the total number of packets flushed.
+int ooo_buffer_flush(ooo_buffer* buf, int *next_expected);

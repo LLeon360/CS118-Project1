@@ -1,20 +1,17 @@
 #include "ooo_buffer.h"
 #include <stdlib.h>
 #include <string.h>
+#include "io.h"
 
 ooo_buffer* ooo_buffer_create(int capacity) {
     ooo_buffer* buf = malloc(sizeof(ooo_buffer));
     if (!buf)
         return NULL;
     buf->capacity = capacity;
-    buf->entries = malloc(sizeof(out_of_order_entry) * capacity);
+    buf->entries = calloc(capacity, sizeof(out_of_order_entry));
     if (!buf->entries) {
         free(buf);
         return NULL;
-    }
-    for (int i = 0; i < capacity; i++) {
-        buf->entries[i].valid = 0;
-        buf->entries[i].payload = NULL;
     }
     return buf;
 }
@@ -53,7 +50,7 @@ void ooo_buffer_store(ooo_buffer* buf, int seq, int length, uint8_t *payload) {
     }
 }
 
-int ooo_buffer_flush(ooo_buffer* buf, int *next_expected, void (*output_io)(uint8_t*, size_t)) {
+int ooo_buffer_flush(ooo_buffer* buf, int *next_expected) {
     int total_flushed = 0;
     int found;
     do {
