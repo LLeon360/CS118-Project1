@@ -195,7 +195,7 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
 
         normal_loop(sockfd, addr, SERVER, input_p, output_p,
                     /* need_to_ack     = */ need_to_ack_val,
-                    /* next_expected   = */ ack_num,
+                    /* cur_ack         = */ ack_num,
                     /* cur_win         = */ flow_window_size,
                     /* cur_seq         = */ seq_num);
     }
@@ -203,7 +203,7 @@ void listen_loop(int sockfd, struct sockaddr_in *addr, int type,
 
 void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                  ssize_t (*input_p)(uint8_t *, size_t), void (*output_p)(uint8_t *, size_t),
-                 int need_to_ack, int next_expected_packet, int cur_win, int cur_seq) {
+                 int need_to_ack, int cur_ack, int cur_win, int cur_seq) {
     // This is the normal loop after the handshake
     // You can use this to send and receive packets
     // The handshake code is in listen_loop()
@@ -213,7 +213,8 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
      * be used continuously for the sender window as it moves, needs to handle wraparound
      * need_to_ack is the SEQ num to pick up off of the incompleteness of the TWH for the server
      * which received an ACK with payload (if -1, no need to ack anything, either because payload is
-     * empty or this is client) next_expected_packet is the first packet that the sender is
+     * empty or this is client) 
+     * cur_ack is the first packet that the sender is
      * expecting to receive, this is used to determine if a packet is in order or out of order
      */
 
@@ -221,15 +222,15 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     NOTE: There is a bit of scuffness in picking off where the twh leaves off due to the
     incompleteness of the TWH (if there's a payload on the last ACK from client -> server). This
     because: On the client side, it has just sent out 3rd packet of ACK which may have payload and
-    thus may need an ACK On the server side, it has just receieved ACK which may have payload and
+    thus may need an ACK. On the server side, it has just receieved ACK which may have payload and
     thus may need to send an ACK out
 
     On the client side, there will be weirdness in that the first ACK expected will not correspond
-    to any packet in the sender window but also shouldn't be treated as a NACK On the server side,
+    to any packet in the sender window but also shouldn't be treated as a NACK. On the server side,
     the server will need to start with a pending ACK queued to ack the client-ACK from TWH
 
     Client carries over the last_ack from the TWH as the last unacked packet but it doesn't need to
-    move it's sender window Client can probably discard ACKS that fall below the sender window (in
+    move it's sender window. Client can probably discard ACKS that fall below the sender window (in
     that it doesn't move the sender window)
 
     Sender carries in a need_to_ack which is the last packet it needs to ack into the pending acks
@@ -296,7 +297,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // Send the packet
                 if (sendto(sockfd, p, sizeof(packet) + data_len, 0, (struct sockaddr *)addr,
                            sizeof(struct sockaddr)) < 0) {
-                    fprintf(stderr, "Error sending packet\n");
+                    fprintf(stderr, "Error sending data packet\n");
                     return errno;
                 }
 
@@ -328,98 +329,98 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // Send the packet
             if (sendto(sockfd, p, sizeof(packet), 0, (struct sockaddr *)addr,
                         sizeof(struct sockaddr)) < 0) {
-                fprintf(stderr, "Error sending packet\n");
+                fprintf(stderr, "Error sending ACK packet\n");
                 return errno;
             }
         }
 
         // Check if there is anything to read since recvfrom is nonblocking
+        // Receive a packet
+        char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
+        packet *p = (packet *) &buf;
+        socklen_t addr_size = sizeof(struct sockaddr_in);
+        int bytes_recvd = recvfrom(sockfd, p, sizeof(packet) + MAX_PAYLOAD, 0,
+                                    (struct sockaddr *)addr, &addr_size);
+        if (bytes_recvd < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // An actual error occurred
+            fprintf(stderr, "Error receiving packet\n");
+            return errno;
+        }
+        if (bytes_recvd > 0) {
+            // do basic validation on the packet for (seq in range (no order check in this),
+            // valid len, valid window, parity)
+            if (basic_packet_validation(p, cur_ack, cur_win)) {
+                // if packet has the ACK flag, must handle that, logic is separate from handling data
+                if (p->flags & ACK) {
+                    // check if the ACK is in the sender window
+                    int ack_num = ntohs(p->ack);
 
-        // make sure there is enough space
-        while (!ooo_buffer_is_full(recv_buffer)) { 
-            // Receive a packet
-            char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
-            packet *p = (packet *)&buf;
-            socklen_t addr_size = sizeof(struct sockaddr_in);
-            int bytes_recvd = recvfrom(sockfd, p, sizeof(packet) + MAX_PAYLOAD, 0,
-                                       (struct sockaddr *)addr, &addr_size);
-            if (bytes_recvd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                // No data available, break the loop
-                break;
-            }
-            if (bytes_recvd < 0) {
-                // An actual error occurred
-                fprintf(stderr, "Error receiving packet\n");
-                return errno;
-            }
-            if (bytes_recvd > 0) {
-                // do basic validation on the packet for (seq in range (no order check in this),
-                // valid len, valid window, parity)
-                if (basic_packet_validation(p, 0, 0)) {
-                    // Check if the packet is in order
-                    // If packet is exactly what we're expecting, output immediately
-                    int pkt_seq = ntohs(p->seq);
-                    int pkt_len = ntohs(p->length);
-
-                    // regardless of data in order, if it's a bundled ACK, we need to handle it
-                    // immediately
-                    if (p->flags & ACK) {
-                        // check if the ACK is in the sender window
-                        int ack_num = ntohs(p->ack);
-
-                        if (ack_num < peek_sender_window(sender_window)->seq) {
-                            if (ack_num == last_dup_ack) {
-                                // duplicate ACK
-                                dup_acks++;
-                            }
-                            else {
-                                // new ACK
-                                dup_acks = 1;
-                            }
-                            if (dup_acks > 3) {
-                                // handle duplicate ACK
-                                // resend the first packet in the sender window
-                                packet *sent_pkt = peek_sender_window(sender_window);
-                                if (sendto(sockfd, sent_pkt,
-                                           sizeof(packet) + ntohs(sent_pkt->length), 0,
-                                           (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
-                                    fprintf(stderr, "Error resending packet\n");
-                                    return errno;
-                                }
-                                dup_acks = 0;
-                            }
+                    if (ack_num <= peek_sender_window(sender_window)->seq) {
+                        if (ack_num == last_dup_ack) {
+                            // duplicate ACK
+                            dup_acks++;
                         }
                         else {
-                            // ACK all packets equal to or less than the ACK number
-                            while (ack_num >= peek_sender_window(sender_window)->seq) {
-                                packet *sent_pkt = dequeue_sender_window(sender_window);
-                                if (ntohs(sent_pkt->seq) == ack_num) {
-                                    free(sent_pkt);
-                                    break;
-                                }
-                                dup_acks = 0;
+                            // new ACK
+                            dup_acks = 0;
+                            last_dup_ack = ack_num;
+                        }
+                        if (dup_acks == 3) {
+                            // handle duplicate ACK
+                            // resend the first packet in the sender window
+                            packet *sent_pkt = peek_sender_window(sender_window);
+                            if (sendto(sockfd, sent_pkt,
+                                        sizeof(packet) + ntohs(sent_pkt->length), 0,
+                                        (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
+                                fprintf(stderr, "Error resending packet\n");
+                                return errno;
                             }
-
-                            // reset the retransmission timer
-                            gettimeofday(&send_time_of_earliest_packet, NULL);
+                            dup_acks = 0;
                         }
                     }
+                    else {
+                        dup_acks = 0;
+                        last_dup_ack = ack_num;
 
-                    if (pkt_seq == next_expected_packet) {
-                        output_io(p->payload, pkt_len);
-                        next_expected_packet += 1;
-                        ooo_buffer_flush(recv_buffer, &next_expected_packet);
+                        // Remove packets with a SEQ number less than the received ACK number from our sender window
+                        while (ack_num > peek_sender_window(sender_window)->seq) {
+                            packet *sent_pkt = dequeue_sender_window(sender_window);
+                            if (ntohs(sent_pkt->seq) == ack_num) {
+                                free(sent_pkt);
+                                break;
+                            }
+                            else {
+                                free(sent_pkt);
+                            }
+                        }
+
+                        // reset the retransmission timer
+                        gettimeofday(&send_time_of_earliest_packet, NULL);
                     }
-                    else if (pkt_seq > next_expected_packet &&
-                             pkt_seq < next_expected_packet + MAX_WINDOW_COUNT) {
-                        // make sure the packet is within our receiver window
-                        ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
-                    }
-                    
-                    // for the in order case, this will be what in expects (after flushing all the in order packets, ie the next missing packet in order)
-                    // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
-                    enqueue_ack(acks_queued, next_expected_packet);
                 }
+
+                // Handle data in packet
+                int pkt_seq = ntohs(p->seq);
+                int pkt_len = ntohs(p->length);
+
+                // If packet is exactly what we're expecting, output immediately
+                if (pkt_seq == cur_ack) {
+                    output_io(p->payload, pkt_len);
+                    cur_ack++;
+                    ooo_buffer_flush(recv_buffer, &cur_ack);
+                }
+                else if (pkt_seq > cur_ack &&
+                            pkt_seq < cur_ack + MAX_WINDOW_COUNT &&
+                                    // make sure there is enough space
+                            !ooo_buffer_is_full(recv_buffer) &&
+                            pkt_len != 0) {
+                    // add out of order packet
+                    ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
+                }
+                
+                // for the in order case, this will be what in expects (after flushing all the in order packets, ie. the next missing packet in order)
+                // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
+                enqueue_ack(acks_queued, cur_ack);
             }
         }
 
@@ -454,8 +455,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
 int basic_packet_validation(packet *p, int cur_ack, int cur_win) {
     return
         // Make sure seq is in expected range
-        (ntohs(p->seq) >= cur_ack) &&
-        (ntohs(p->seq) < cur_ack + MAX_PAYLOAD - 1)
+        (ntohs(p->seq) >= cur_ack)
         // Make sure length is in expected range
         && (ntohs(p->length) <= MAX_PAYLOAD)
         // Make sure window didn't shrink
