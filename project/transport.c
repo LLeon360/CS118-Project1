@@ -85,6 +85,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         // See the three way handshake description on the spec
         seq_num = (twh_syn_data_len == 0) ? 0 : seq_num + 1;
         twh_ack->seq = htons(seq_num);
+        seq_num++;
         twh_ack->ack = htons(ack_num);
         twh_ack->length = htons(twh_ack_data_len);
         twh_ack->win = htons(MAX_WINDOW);
@@ -147,6 +148,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         packet *twh_synack = (packet *)&twh_synack_buf;
         size_t twh_synack_data_len = input_io(twh_synack->payload, MAX_PAYLOAD);
         twh_synack->seq = htons(seq_num);
+        seq_num++;
         twh_synack->ack = htons(ack_num);
         twh_synack->length = htons(twh_synack_data_len);
         twh_synack->win = htons(MAX_WINDOW);
@@ -254,9 +256,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         enqueue_ack(acks_queued, need_to_ack);
     }
 
-    // track if stdin is exhausted, this assumes that all of it is given in one go
-    bool data_left_to_send = true;
-
     // track dup ACKs
     int dup_acks = 0;
     int last_dup_ack = -1;
@@ -264,49 +263,46 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     struct timeval send_time_of_earliest_packet = {0};
 
     while (true) {
-        if (data_left_to_send) {
-            // Send as much as possible out of the stdout into the sender window
-            while (sender_window->count < MAX_WINDOW_COUNT && data_left_to_send) {
-                // try reading from stdin, if len is 0, nothing left to send
-                char* buf = calloc(1, sizeof(packet) + MAX_PAYLOAD);
-                packet *p = (packet *) buf;
-                // Note that when calling free on p, C will know to free the space in the payload, so calling free on p is ok
+        // Send as much as possible out of the stdout into the sender window
+        while (sender_window->count < MAX_WINDOW_COUNT) {
+            // try reading from stdin, if len is 0, nothing left to send
+            char* buf = calloc(1, sizeof(packet) + MAX_PAYLOAD);
+            packet *p = (packet *) buf;
+            // Note that when calling free on p, C will know to free the space in the payload, so calling free on p is ok
 
-                size_t data_len = input_io(p->payload, MAX_PAYLOAD);
-                if (data_len == 0) {
-                    data_left_to_send = false;
-                    free(p);
-                    break;
-                }
-                // Create the packet
-                p->seq = htons(cur_seq);
-                cur_seq++;
-                // check if we have an ACK to send
-                if (acks_queued->count > 0) {
-                    p->flags |= ACK;
-                    p->ack = htons(dequeue_ack(acks_queued));
-                }
-                p->length = htons(data_len);
-                p->win = htons(cur_win);
-                if ((bit_count(p) & 1) == 1) {
-                    p->flags |= PARITY; // set the parity bit
-                }
-
-                // Send the packet
-                if (sendto(sockfd, p, sizeof(packet) + data_len, 0, (struct sockaddr *)addr,
-                           sizeof(struct sockaddr)) < 0) {
-                    fprintf(stderr, "Error sending data packet\n");
-                    return errno;
-                }
-
-                if (sender_window->count == 0) {
-                    // If this is the first packet sent, set the send time
-                    gettimeofday(&send_time_of_earliest_packet, NULL);
-                }
-
-                // Add the packet to the sender window
-                enqueue_sender_window(sender_window, p);
+            size_t data_len = input_io(p->payload, MAX_PAYLOAD);
+            if (data_len == 0) {
+                free(p);
+                break;
             }
+            // Create the packet
+            p->seq = htons(cur_seq);
+            cur_seq++;
+            // check if we have an ACK to send
+            if (acks_queued->count > 0) {
+                p->flags |= ACK;
+                p->ack = htons(dequeue_ack(acks_queued));
+            }
+            p->length = htons(data_len);
+            p->win = htons(cur_win);
+            if ((bit_count(p) & 1) == 1) {
+                p->flags |= PARITY; // set the parity bit
+            }
+
+            // Send the packet
+            if (sendto(sockfd, p, sizeof(packet) + data_len, 0, (struct sockaddr *)addr,
+                        sizeof(struct sockaddr)) < 0) {
+                fprintf(stderr, "Error sending data packet\n");
+                return errno;
+            }
+
+            if (sender_window->count == 0) {
+                // If this is the first packet sent, set the send time
+                gettimeofday(&send_time_of_earliest_packet, NULL);
+            }
+
+            // Add the packet to the sender window
+            enqueue_sender_window(sender_window, p);
         }
         // since we can no longer bundle acks with data, we need to send a packet with just the
         // ACK, these don't need to be buffered up
@@ -316,6 +312,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
             packet *p = (packet *) &buf;
             p->seq = htons(cur_seq);
+            cur_seq++;
             p->ack = htons(dequeue_ack(acks_queued));
             p->flags |= ACK;
             p->length = 0;
@@ -420,6 +417,9 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
                 enqueue_ack(acks_queued, cur_ack);
             }
+        }
+        else {
+            free(p);
         }
 
         // Check if the retransmission timer has expired
