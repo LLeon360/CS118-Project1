@@ -269,16 +269,19 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // Send as much as possible out of the stdout into the sender window
             while (sender_window->count < MAX_WINDOW_COUNT && data_left_to_send) {
                 // try reading from stdin, if len is 0, nothing left to send
-                char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
-                packet *p = (packet *)&buf;
+                char* buf = calloc(1, sizeof(packet) + MAX_PAYLOAD);
+                packet *p = (packet *) buf;
+                // Note that when calling free on p, C will know to free the space in the payload, so calling free on p is ok
 
                 size_t data_len = input_io(p->payload, MAX_PAYLOAD);
                 if (data_len == 0) {
                     data_left_to_send = false;
+                    free(p);
                     break;
                 }
                 // Create the packet
                 p->seq = htons(cur_seq);
+                cur_seq++;
                 // check if we have an ACK to send
                 if (acks_queued->count > 0) {
                     p->flags |= ACK;
@@ -286,7 +289,6 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 }
                 p->length = htons(data_len);
                 p->win = htons(cur_win);
-                p->flags = 0;
                 if ((bit_count(p) & 1) == 1) {
                     p->flags |= PARITY; // set the parity bit
                 }
@@ -311,8 +313,9 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         // ACK, these don't need to be buffered up
         while (acks_queued->count > 0) {
             // Create the packet
+            // Since we don't need to buffer these, no need to dynamically allocate them
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
-            packet *p = (packet *)&buf;
+            packet *p = (packet *) &buf;
             p->seq = htons(cur_seq);
             p->ack = htons(dequeue_ack(acks_queued));
             p->flags |= ACK;
@@ -405,7 +408,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                     if (pkt_seq == next_expected_packet) {
                         output_io(p->payload, pkt_len);
                         next_expected_packet += 1;
-                        ooo_buffer_flush(recv_buffer, &next_expected_packet, output_io);
+                        ooo_buffer_flush(recv_buffer, &next_expected_packet);
                     }
                     else if (pkt_seq > next_expected_packet &&
                              pkt_seq < next_expected_packet + MAX_WINDOW_COUNT) {
