@@ -182,10 +182,10 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                 return errno;
             }
             if (bytes_recvd > 0) {
-                // Check flags, ack, basic validation
+                // Check flags, ack, parity
                 if (((twh_ack->flags & SYN) == 0) && ((twh_ack->flags & ACK) == ACK) &&
                     (ntohs(twh_ack->ack) == seq_num) &&
-                    basic_packet_validation(twh_ack, ack_num, flow_window_size)) {
+                    ((bit_count(twh_ack) & 1) == 0)) {
                     ack_num = ntohs(twh_ack->seq) + 1;
                     flow_window_size = ntohs(twh_ack->win);
 
@@ -348,7 +348,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // do basic validation on the packet for (seq in range (no order check in this),
             // valid len, valid window, parity)
             fprintf(stderr, "User %d got a packet\n", type);
-            if (basic_packet_validation(p, cur_ack, cur_win)) {
+            if (((bit_count(p) & 1) == 0)) {
                 // if packet has the ACK flag, must handle that, logic is separate from handling data
                 if (p->flags & ACK) {
                     // check if the ACK is in the sender window
@@ -409,6 +409,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                     output_io(p->payload, pkt_len);
                     cur_ack++;
                     ooo_buffer_flush(recv_buffer, &cur_ack);
+                    enqueue_ack(acks_queued, cur_ack);
                 }
                 else if (pkt_seq > cur_ack &&
                             pkt_seq < cur_ack + MAX_WINDOW_COUNT &&
@@ -417,11 +418,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                             pkt_len != 0) {
                     // add out of order packet
                     ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
+                    enqueue_ack(acks_queued, cur_ack);
                 }
-                
-                // for the in order case, this will be what in expects (after flushing all the in order packets, ie. the next missing packet in order)
-                // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
-                enqueue_ack(acks_queued, cur_ack);
             }
         }
 
@@ -447,22 +445,4 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     free(sender_window);
     free(acks_queued);
     return 0;
-}
-
-// Checks that a few headers look correct
-// DOES NOT check the SYN or ACK flags, do that yourself
-// DON'T use this for the first two handshake messages, those messages are more lax
-// Note that p->ack may not be cur_seq + 1, since it could be acknowledging a previous packet in
-// your window Returns 1 on a good packet, 0 if something's wrong
-int basic_packet_validation(packet *p, int cur_ack, int cur_win) {
-    return
-        // Make sure seq is in expected range
-        (ntohs(p->seq) >= cur_ack)
-        // Make sure length is in expected range
-        && (ntohs(p->length) <= MAX_PAYLOAD)
-        // Make sure window didn't shrink
-        // The spec said the window should never shrink
-        && (ntohs(p->win) >= cur_win)
-        // Check parity
-        && ((bit_count(p) & 1) == 0);
 }
