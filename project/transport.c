@@ -236,7 +236,8 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
      */
 
     // need to store a sender window, for window of packets that are in flight / not acked
-    sender_window_queue sender_window;
+    sender_window_queue* sender_window = malloc(sizeof(sender_window_queue));
+    init_sender_window_queue(sender_window);
     // need to store a receiver window, for packets that are in the buffer, received out of order
     char receiver_window_buf[MAX_WINDOW] = {0};
     // // way to check if a packet is present in the receiver window (we set 1 at the start of a
@@ -246,11 +247,12 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     ooo_buffer *recv_buffer = ooo_buffer_create(DEFAULT_OUT_OF_ORDER_CAPACITY);
 
     // buffer up ACKS to be paired into outgoing data
-    ack_queue acks_queued;
+    ack_queue* acks_queued = malloc(sizeof(ack_queue));
+    init_ack_queue(acks_queued);
 
     // if given need_to_ack, to pick up where the TWH left off
     if (need_to_ack != -1) {
-        enqueue_ack(&acks_queued, need_to_ack);
+        enqueue_ack(acks_queued, need_to_ack);
     }
 
     // track if stdin is exhausted, this assumes that all of it is given in one go
@@ -265,7 +267,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     while (true) {
         if (data_left_to_send) {
             // Send as much as possible out of the stdout into the sender window
-            while (sender_window.count < MAX_WINDOW_COUNT && data_left_to_send) {
+            while (sender_window->count < MAX_WINDOW_COUNT && data_left_to_send) {
                 // try reading from stdin, if len is 0, nothing left to send
                 char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
                 packet *p = (packet *)&buf;
@@ -278,9 +280,9 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // Create the packet
                 p->seq = htons(cur_seq);
                 // check if we have an ACK to send
-                if (acks_queued.count > 0) {
+                if (acks_queued->count > 0) {
                     p->flags |= ACK;
-                    p->ack = htons(dequeue_ack(&acks_queued));
+                    p->ack = htons(dequeue_ack(acks_queued));
                 }
                 p->length = htons(data_len);
                 p->win = htons(cur_win);
@@ -296,23 +298,23 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                     return errno;
                 }
 
-                if (sender_window.count == 0) {
+                if (sender_window->count == 0) {
                     // If this is the first packet sent, set the send time
                     gettimeofday(&send_time_of_earliest_packet, NULL);
                 }
 
                 // Add the packet to the sender window
-                enqueue_sender_window(&sender_window, p);
+                enqueue_sender_window(sender_window, p);
             }
         }
         // since we can no longer bundle acks with data, we need to send a packet with just the
         // ACK, these don't need to be buffered up
-        while (acks_queued.count > 0) {
+        while (acks_queued->count > 0) {
             // Create the packet
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
             packet *p = (packet *)&buf;
             p->seq = htons(cur_seq);
-            p->ack = htons(dequeue_ack(&acks_queued));
+            p->ack = htons(dequeue_ack(acks_queued));
             p->flags |= ACK;
             p->length = 0;
             p->win = htons(cur_win);
@@ -362,7 +364,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                         // check if the ACK is in the sender window
                         int ack_num = ntohs(p->ack);
 
-                        if (ack_num < peek_sender_window(&sender_window)->seq) {
+                        if (ack_num < peek_sender_window(sender_window)->seq) {
                             if (ack_num == last_dup_ack) {
                                 // duplicate ACK
                                 dup_acks++;
@@ -374,7 +376,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                             if (dup_acks > 3) {
                                 // handle duplicate ACK
                                 // resend the first packet in the sender window
-                                packet *sent_pkt = peek_sender_window(&sender_window);
+                                packet *sent_pkt = peek_sender_window(sender_window);
                                 if (sendto(sockfd, sent_pkt,
                                            sizeof(packet) + ntohs(sent_pkt->length), 0,
                                            (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
@@ -386,8 +388,8 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                         }
                         else {
                             // ACK all packets equal to or less than the ACK number
-                            while (ack_num >= peek_sender_window(&sender_window)->seq) {
-                                packet *sent_pkt = dequeue_sender_window(&sender_window);
+                            while (ack_num >= peek_sender_window(sender_window)->seq) {
+                                packet *sent_pkt = dequeue_sender_window(sender_window);
                                 if (ntohs(sent_pkt->seq) == ack_num) {
                                     free(sent_pkt);
                                     break;
@@ -413,7 +415,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                     
                     // for the in order case, this will be what in expects (after flushing all the in order packets, ie the next missing packet in order)
                     // for the out of order case, this will be a NACK to indicate that it's missing the some earlier packet
-                    enqueue_ack(&acks_queued, next_expected_packet);
+                    enqueue_ack(acks_queued, next_expected_packet);
                 }
             }
         }
@@ -425,7 +427,7 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         // 1 sec timeout
         if (TV_DIFF(current_time, send_time_of_earliest_packet) > 1) {
             // Resend the first packet in the sender window
-            packet *sent_pkt = peek_sender_window(&sender_window);
+            packet *sent_pkt = peek_sender_window(sender_window);
             if (sendto(sockfd, sent_pkt, sizeof(packet) + ntohs(sent_pkt->length), 0,
                        (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0) {
                 fprintf(stderr, "Error resending packet\n");
@@ -435,7 +437,10 @@ void normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         }
     }
 
+    // This will never happen, but just for good measure here are some frees
     ooo_buffer_destroy(recv_buffer);
+    free(sender_window);
+    free(acks_queued);
 }
 
 // Checks that a few headers look correct
