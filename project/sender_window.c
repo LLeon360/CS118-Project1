@@ -1,0 +1,41 @@
+#include "sender_window.h"
+#include <stdlib.h>
+
+void init_sender_window_queue(sender_window_queue* q) {
+    q->count = 0;
+    q->head = NULL;
+    q->tail = NULL;
+}
+
+void enqueue_sender_window(sender_window_queue* q, packet* p) {
+    sender_window_node* node = malloc(sizeof(sender_window_node));
+    if (!node)
+        return;
+    node->p = p;
+    node->next = NULL;
+    if (q->head == NULL) {
+        q->head = node;
+        q->tail = node;
+    } else {
+        q->tail->next = node;
+        q->tail = node;
+    }
+    q->count++;
+}
+
+packet* dequeue_sender_window(sender_window_queue* q) {
+    if (q->head == NULL)
+        return NULL;
+    sender_window_node* node = q->head;
+    packet* p = node->p;
+    q->head = node->next;
+    free(node);
+    q->count--;
+    return p;
+}
+
+packet* peek_sender_window(sender_window_queue* q) {
+    if (q->head == NULL)
+        return NULL;
+    return q->head->p;
+}
