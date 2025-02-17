@@ -286,7 +286,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 p->ack = htons(dequeue_ack(acks_queued));
             }
             p->length = htons(data_len);
-            p->win = htons(cur_win);
+            p->win = htons(MAX_WINDOW);
             if ((bit_count(p) & 1) == 1) {
                 p->flags |= PARITY; // set the parity bit
             }
@@ -314,16 +314,18 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // Since we don't need to buffer these, no need to dynamically allocate them
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
             packet *p = (packet *) &buf;
-            p->seq = htons(cur_seq);
-            cur_seq++;
+            // Pure ACK packets do not increase SEQ number
+            // In fact, we'll just set SEQ to 0
+            p->seq = 0;
             p->ack = htons(dequeue_ack(acks_queued));
             p->flags |= ACK;
             p->length = 0;
-            p->win = htons(cur_win);
+            p->win = htons(MAX_WINDOW);
             if ((bit_count(p) & 1) == 1) {
                 p->flags |= PARITY; // set the parity bit
             }
 
+            fprintf(stderr, "User %d is sending ACK packet number %d\n", type, ntohs(p->ack));
             // Send the packet
             if (sendto(sockfd, p, sizeof(packet), 0, (struct sockaddr *)addr,
                         sizeof(struct sockaddr)) < 0) {
@@ -353,21 +355,26 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 if (p->flags & ACK) {
                     // check if the ACK is in the sender window
                     int ack_num = ntohs(p->ack);
+                    fprintf(stderr, "Received ACK $d\n", ack_num);
 
-                    if ((peek_sender_window(sender_window) != NULL) && (ack_num <= peek_sender_window(sender_window)->seq)) {
+                    if ((peek_sender_window(sender_window) != NULL) && (ack_num <= ntohs(peek_sender_window(sender_window)->seq))) {
                         if (ack_num == last_dup_ack) {
                             // duplicate ACK
                             dup_acks++;
+                            fprintf(stderr, "Increasing duplicate ACKs, count is %d\n", dup_acks);
                         }
                         else {
                             // new ACK
                             dup_acks = 0;
                             last_dup_ack = ack_num;
+                            fprintf(stderr, "New (too small) ACK num %d\n", ack_num);
                         }
                         if (dup_acks == 3) {
                             // handle duplicate ACK
                             // resend the first packet in the sender window
                             packet *sent_pkt = peek_sender_window(sender_window);
+                            if (sent_pkt != NULL) fprintf(stderr, "Duplicate ACKs, resending packet %d\n", ntohs(sent_pkt->seq));
+
                             if ((sent_pkt != NULL) && (sendto(sockfd, sent_pkt,
                                         sizeof(packet) + ntohs(sent_pkt->length), 0,
                                         (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0)) {
@@ -381,9 +388,12 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                         dup_acks = 0;
                         last_dup_ack = ack_num;
 
+                        fprintf(stderr, "Packets to remove from sending buffer\n");
+
                         // Remove packets with a SEQ number less than the received ACK number from our sender window
-                        while ((peek_sender_window(sender_window) != NULL) && (ack_num > peek_sender_window(sender_window)->seq)) {
+                        while ((peek_sender_window(sender_window) != NULL) && (ack_num > ntohs(peek_sender_window(sender_window)->seq))) {
                             packet *sent_pkt = dequeue_sender_window(sender_window);
+                            fprintf(stderr, "Removing packet %d from sender window\n", ntohs(sent_pkt->seq));
                             if (ntohs(sent_pkt->seq) == ack_num) {
                                 free(sent_pkt);
                                 break;
@@ -402,6 +412,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 int pkt_seq = ntohs(p->seq);
                 int pkt_len = ntohs(p->length);
 
+                // NEED TO HANDLE INCREASE IN cur_win
+
                 fprintf(stderr, "User %d received SEQ %d, expecting SEQ %d\n", type, pkt_seq, cur_ack);
 
                 // If packet is exactly what we're expecting, output immediately
@@ -413,8 +425,9 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 }
                 else if (pkt_seq > cur_ack &&
                             pkt_seq < cur_ack + MAX_WINDOW_COUNT &&
-                                    // make sure there is enough space
+                                // make sure there is enough space
                             !ooo_buffer_is_full(recv_buffer) &&
+                                // don't bother storing the 0 length pure ACK packets
                             pkt_len != 0) {
                     // add out of order packet
                     ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
