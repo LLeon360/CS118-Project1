@@ -273,7 +273,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             packet *p = (packet *) buf;
             // Note that when calling free on p, C will know to free the space in the payload, so calling free on p is ok
 
-            size_t data_len = input_io(p->payload, MAX(cur_win - sender_window->byte_count, MAX_PAYLOAD));
+            size_t data_len = input_io(p->payload, MIN(cur_win - sender_window->byte_count, MAX_PAYLOAD));
             if (data_len == 0) {
                 free(p);
                 break;
