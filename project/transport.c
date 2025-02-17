@@ -279,6 +279,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             }
             // Create the packet
             p->seq = htons(cur_seq);
+            fprintf(stderr, "User %d is sending packet number %d\n", type, cur_seq);
             cur_seq++;
             // check if we have an ACK to send
             if (acks_queued->count > 0) {
@@ -291,7 +292,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 p->flags |= PARITY; // set the parity bit
             }
 
-            fprintf(stderr, "User %d is sending packet number %d\n", type, cur_seq);
             // Send the packet
             if (sendto(sockfd, p, sizeof(packet) + data_len, 0, (struct sockaddr *)addr,
                         sizeof(struct sockaddr)) < 0) {
@@ -355,7 +355,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 if (p->flags & ACK) {
                     // check if the ACK is in the sender window
                     int ack_num = ntohs(p->ack);
-                    fprintf(stderr, "Received ACK $d\n", ack_num);
+                    fprintf(stderr, "Received ACK %d\n", ack_num);
 
                     if ((peek_sender_window(sender_window) != NULL) && (ack_num <= ntohs(peek_sender_window(sender_window)->seq))) {
                         if (ack_num == last_dup_ack) {
@@ -444,6 +444,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         if (TV_DIFF(current_time, send_time_of_earliest_packet) > 1) {
             // Resend the first packet in the sender window
             packet *sent_pkt = peek_sender_window(sender_window);
+            if (peek_sender_window(sender_window) != NULL) fprintf(stderr, "Timeout, resending packet %d\n", ntohs(sent_pkt->seq));
             if ((peek_sender_window(sender_window) != NULL) && (sendto(sockfd, sent_pkt, sizeof(packet) + ntohs(sent_pkt->length), 0,
                        (struct sockaddr *)addr, sizeof(struct sockaddr)) < 0)) {
                 fprintf(stderr, "Error resending packet\n");
