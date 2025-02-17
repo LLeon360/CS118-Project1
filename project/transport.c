@@ -105,7 +105,6 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
 
         // Phase 4: Normal loop
         normal_loop(sockfd, addr, CLIENT, input_p, output_p,
-                    /* need_to_ack     = */ -1,
                     /* next_expected   = */ ack_num,
                     /* cur_win         = */ flow_window_size,
                     /* cur_seq         = */ seq_num);
@@ -170,9 +169,6 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         char twh_ack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet *twh_ack = (packet *)&twh_ack_buf;
 
-        // incase the ACK packet carries a payload, pending ack needs to be sent in the normal loop
-        int need_to_ack_val = -1;
-
         while (true) {
             int bytes_recvd = recvfrom(sockfd, twh_ack, sizeof(packet) + MAX_PAYLOAD, 0,
                                        (struct sockaddr *)addr, &addr_size);
@@ -190,17 +186,12 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                     flow_window_size = ntohs(twh_ack->win);
 
                     output_io(twh_ack->payload, ntohs(twh_ack->length));
-
-                    if (ntohs(twh_ack->length) > 0) {
-                        need_to_ack_val = ntohs(twh_ack->seq) + 1;
-                    }
                     break;
                 }
             }
         }
 
         return normal_loop(sockfd, addr, SERVER, input_p, output_p,
-                    /* need_to_ack     = */ need_to_ack_val,
                     /* cur_ack         = */ ack_num,
                     /* cur_win         = */ flow_window_size,
                     /* cur_seq         = */ seq_num);
@@ -209,7 +200,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
 
 int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                  ssize_t (*input_p)(uint8_t *, size_t), void (*output_p)(uint8_t *, size_t),
-                 int need_to_ack, int cur_ack, int cur_win, int cur_seq) {
+                 int cur_ack, int cur_win, int cur_seq) {
     // This is the normal loop after the handshake
     // You can use this to send and receive packets
     // The handshake code is in listen_loop()
@@ -217,29 +208,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     /**
      * cur_seq is the SEQ num for the first packet that will be sent out by the normal loop, will
      * be used continuously for the sender window as it moves, needs to handle wraparound
-     * need_to_ack is the SEQ num to pick up off of the incompleteness of the TWH for the server
-     * which received an ACK with payload (if -1, no need to ack anything, either because payload is
-     * empty or this is client) 
      * cur_ack is the first packet that the sender is
      * expecting to receive, this is used to determine if a packet is in order or out of order
-     */
-
-    /**
-    NOTE: There is a bit of scuffness in picking off where the twh leaves off due to the
-    incompleteness of the TWH (if there's a payload on the last ACK from client -> server). This
-    because: On the client side, it has just sent out 3rd packet of ACK which may have payload and
-    thus may need an ACK. On the server side, it has just receieved ACK which may have payload and
-    thus may need to send an ACK out
-
-    On the client side, there will be weirdness in that the first ACK expected will not correspond
-    to any packet in the sender window but also shouldn't be treated as a NACK. On the server side,
-    the server will need to start with a pending ACK queued to ack the client-ACK from TWH
-
-    Client carries over the last_ack from the TWH as the last unacked packet but it doesn't need to
-    move it's sender window. Client can probably discard ACKS that fall below the sender window (in
-    that it doesn't move the sender window)
-
-    Sender carries in a need_to_ack which is the last packet it needs to ack into the pending acks
      */
 
     // need to store a sender window, for window of packets that are in flight / not acked
@@ -250,13 +220,11 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     ooo_buffer *recv_buffer = ooo_buffer_create(DEFAULT_OUT_OF_ORDER_CAPACITY);
 
     // buffer up ACKS to be paired into outgoing data
-    ack_queue* acks_queued = malloc(sizeof(ack_queue));
-    init_ack_queue(acks_queued);
+    // ack_queue* acks_queued = malloc(sizeof(ack_queue));
+    // init_ack_queue(acks_queued);
 
-    // if given need_to_ack, to pick up where the TWH left off
-    if (need_to_ack != -1) {
-        enqueue_ack(acks_queued, need_to_ack);
-    }
+    // instead of an ACK queue, use a bool to indicate if we have an ACK to send
+    int need_to_send_ack = 0;
 
     // track dup ACKs
     int dup_acks = 0;
@@ -282,11 +250,10 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             p->seq = htons(cur_seq);
             fprintf(stderr, "User %d is sending packet number %d\n", type, cur_seq);
             cur_seq++;
-            // check if we have an ACK to send
-            if (acks_queued->count > 0) {
-                p->flags |= ACK;
-                p->ack = htons(dequeue_ack(acks_queued));
-            }
+            // ALWAYS send ACK, this is REF behavior
+            p->flags |= ACK;
+            p->ack = htons(cur_ack);
+            need_to_send_ack = 0; // no longer need to send an ACK
             p->length = htons(data_len);
             p->win = htons(MAX_WINDOW);
             if ((bit_count(p) & 1) == 1) {
@@ -309,9 +276,8 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // Add the packet to the sender window
             enqueue_sender_window(sender_window, p);
         }
-        // since we can no longer bundle acks with data, we need to send a packet with just the
-        // ACK, these don't need to be buffered up
-        while (acks_queued->count > 0) {
+        // if we did not send anything, and we need to send an ACK, we send it
+        if (need_to_send_ack) {
             // Create the packet
             // Since we don't need to buffer these, no need to dynamically allocate them
             char buf[sizeof(packet) + MAX_PAYLOAD] = {0};
@@ -319,7 +285,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
             // Pure ACK packets do not increase SEQ number
             // In fact, we'll just set SEQ to 0
             p->seq = 0;
-            p->ack = htons(dequeue_ack(acks_queued));
+            p->ack = htons(cur_ack);
             p->flags |= ACK;
             p->length = 0;
             p->win = htons(MAX_WINDOW);
@@ -334,6 +300,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 fprintf(stderr, "Error sending ACK packet\n");
                 return errno;
             }
+            need_to_send_ack = 0; // sent the ACK, no longer need to send it
         }
 
         // Check if there is anything to read since recvfrom is nonblocking
@@ -365,11 +332,11 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                             dup_acks++;
                             fprintf(stderr, "Increasing duplicate ACKs, count is %d\n", dup_acks);
                         }
-                        else {
+                        else if (ack_num > last_dup_ack) {
+                            fprintf(stderr, "New (too small) ACK num %d, greater than previous %d \n", ack_num, last_dup_ack);
                             // new ACK
                             dup_acks = 0;
                             last_dup_ack = ack_num;
-                            fprintf(stderr, "New (too small) ACK num %d\n", ack_num);
                         }
                         if (dup_acks == 3) {
                             // handle duplicate ACK
@@ -422,7 +389,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                     output_io(p->payload, pkt_len);
                     cur_ack++;
                     ooo_buffer_flush(recv_buffer, &cur_ack);
-                    enqueue_ack(acks_queued, cur_ack);
+                    need_to_send_ack = 1; // need to send an ACK for this packet
                 }
                 else if (pkt_seq > cur_ack &&
                             pkt_seq < cur_ack + MAX_WINDOW_COUNT &&
@@ -431,8 +398,18 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                                 // don't bother storing the 0 length pure ACK packets
                             pkt_len != 0) {
                     // add out of order packet
+                    fprintf(stderr, "User %d received out of order packet %d, STORING and queue dup ACK\n", type, pkt_seq);
                     ooo_buffer_store(recv_buffer, pkt_seq, pkt_len, p->payload);
-                    enqueue_ack(acks_queued, cur_ack);
+                    need_to_send_ack = 1; // need to send an ACK, to indicate we received a DUP
+                }
+                else if (ooo_buffer_is_full(recv_buffer) && pkt_len != 0) {
+                    // buffer is full, drop the packet
+                    fprintf(stderr, "User %d received out of order packet %d, dropping\n", type, pkt_seq);
+                }
+                else if ((pkt_seq >= cur_ack + MAX_WINDOW_COUNT || 
+                            pkt_seq < cur_ack) && pkt_len != 0) {
+                    // packet is out of range
+                    fprintf(stderr, "User %d received out of range packet %d\n", type, pkt_seq);
                 }
             }
         }
@@ -458,6 +435,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     // This will never happen, but just for good measure here are some frees
     ooo_buffer_destroy(recv_buffer);
     free(sender_window);
-    free(acks_queued);
+    // free(acks_queued);
     return 0;
 }
