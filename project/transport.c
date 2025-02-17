@@ -263,16 +263,17 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     int last_dup_ack = -1;
 
     struct timeval send_time_of_earliest_packet = {0};
+    int sent_first_packet = 0;
 
     while (true) {
         // Send as much as possible out of the stdout into the sender window
-        while (sender_window->count < MAX_WINDOW_COUNT) {
+        while (sender_window->byte_count < cur_win) {
             // try reading from stdin, if len is 0, nothing left to send
             char* buf = calloc(1, sizeof(packet) + MAX_PAYLOAD);
             packet *p = (packet *) buf;
             // Note that when calling free on p, C will know to free the space in the payload, so calling free on p is ok
 
-            size_t data_len = input_io(p->payload, MAX_PAYLOAD);
+            size_t data_len = input_io(p->payload, MAX(cur_win - sender_window->byte_count, MAX_PAYLOAD));
             if (data_len == 0) {
                 free(p);
                 break;
@@ -299,9 +300,10 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 return errno;
             }
 
-            if (sender_window->count == 0) {
+            if (sent_first_packet == 0) {
                 // If this is the first packet sent, set the send time
                 gettimeofday(&send_time_of_earliest_packet, NULL);
+                sent_first_packet = 1;
             }
 
             // Add the packet to the sender window
@@ -411,8 +413,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
                 // Handle data in packet
                 int pkt_seq = ntohs(p->seq);
                 int pkt_len = ntohs(p->length);
-
-                // NEED TO HANDLE INCREASE IN cur_win
+                cur_win = ntohs(p->win);
 
                 fprintf(stderr, "User %d received SEQ %d, expecting SEQ %d\n", type, pkt_seq, cur_ack);
 

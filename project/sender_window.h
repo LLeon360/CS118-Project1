@@ -7,7 +7,7 @@ typedef struct sender_window_node {
 } sender_window_node;
 
 typedef struct {
-    int count;
+    int byte_count;
     sender_window_node* head;
     sender_window_node* tail;
 } sender_window_queue;
