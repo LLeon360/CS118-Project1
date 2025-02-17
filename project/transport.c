@@ -442,7 +442,7 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
         gettimeofday(&current_time, NULL);
 
         // 1 sec timeout
-        if (TV_DIFF(current_time, send_time_of_earliest_packet) > 1) {
+        if (TV_DIFF(current_time, send_time_of_earliest_packet) > RTO) {
             // Resend the first packet in the sender window
             packet *sent_pkt = peek_sender_window(sender_window);
             if (peek_sender_window(sender_window) != NULL) fprintf(stderr, "Timeout, resending packet %d\n", ntohs(sent_pkt->seq));
