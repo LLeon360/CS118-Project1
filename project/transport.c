@@ -219,10 +219,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     // Initialize out-of-order table
     ooo_buffer *recv_buffer = ooo_buffer_create(DEFAULT_OUT_OF_ORDER_CAPACITY);
 
-    // buffer up ACKS to be paired into outgoing data
-    // ack_queue* acks_queued = malloc(sizeof(ack_queue));
-    // init_ack_queue(acks_queued);
-
     // instead of an ACK queue, use a bool to indicate if we have an ACK to send
     int need_to_send_ack = 0;
 
@@ -435,6 +431,5 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
     // This will never happen, but just for good measure here are some frees
     ooo_buffer_destroy(recv_buffer);
     free(sender_window);
-    // free(acks_queued);
     return 0;
 }
