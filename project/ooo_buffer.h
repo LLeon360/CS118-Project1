@@ -4,17 +4,7 @@
 
 #define DEFAULT_OUT_OF_ORDER_CAPACITY 40
 
-typedef struct {
-    int seq;         // Packet sequence number
-    int length;      // Payload length
-    uint8_t *payload;// Dynamically allocated payload
-    int valid;       // 1 if entry is in use, 0 otherwise
-} out_of_order_entry;
-
-typedef struct {
-    out_of_order_entry *entries; // Dynamic array of entries
-    int capacity;                // Maximum number of entries
-} ooo_buffer;
+typedef struct ooo_buffer ooo_buffer;
 
 // Create a new out-of-order buffer with the specified capacity.
 // Returns a pointer to the new buffer, or NULL on failure.
