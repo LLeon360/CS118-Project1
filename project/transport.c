@@ -430,6 +430,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
 
     // This will never happen, but just for good measure here are some frees
     ooo_buffer_destroy(recv_buffer);
-    free(sender_window);
+    destroy_sender_window_queue(sender_window);
     return 0;
 }

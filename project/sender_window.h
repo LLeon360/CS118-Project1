@@ -13,6 +13,7 @@ typedef struct {
 } sender_window_queue;
 
 void init_sender_window_queue(sender_window_queue* q);
+void destroy_sender_window_queue(sender_window_queue* q);
 void enqueue_sender_window(sender_window_queue* q, packet* p);
 packet* dequeue_sender_window(sender_window_queue* q);
 packet* peek_sender_window(sender_window_queue* q);
