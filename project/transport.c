@@ -68,7 +68,6 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                     (ntohs(twh_synack->ack) == seq_num) && ((bit_count(twh_synack) & 1) == 0)) {
                     ack_num = ntohs(twh_synack->seq) + 1;
                     flow_window_size = ntohs(twh_synack->win);
-
                     output_io(twh_synack->payload, ntohs(twh_synack->length));
 
                     break;
@@ -131,7 +130,6 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
                     ((bit_count(twh_syn) & 1) == 0)) {
                     ack_num = ntohs(twh_syn->seq) + 1;
                     flow_window_size = ntohs(twh_syn->win);
-
                     output_io(twh_syn->payload, ntohs(twh_syn->length));
 
                     break;
