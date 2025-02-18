@@ -27,7 +27,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         // Phase 1: Establish SYN
 
         // Create the SYN packet
-        int seq_num = 17; // Anything under 1000 is fine
+        int seq_num = (rand() % 1000) + 1; // Anything under 1000 is fine
         char twh_syn_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet *twh_syn = (packet *)&twh_syn_buf;
         size_t twh_syn_data_len = input_io(twh_syn->payload, MAX_PAYLOAD);
@@ -144,8 +144,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         // Phase 2: Respond with SYN ACK
 
         // Create the SYN ACK packet
-        int seq_num = 1000; // Anything under 1000 is fine, making it different from client to make
-                            // debugging easier
+        int seq_num = (rand() % 1000) + 1; // Anything under 1000 is fine
         char twh_synack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet *twh_synack = (packet *)&twh_synack_buf;
         size_t twh_synack_data_len = input_io(twh_synack->payload, MAX_PAYLOAD);
