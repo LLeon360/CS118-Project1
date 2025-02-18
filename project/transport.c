@@ -83,9 +83,13 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         size_t twh_ack_data_len = input_io(twh_ack->payload, MAX_PAYLOAD);
         // See the three way handshake description on the spec
         // Already added one before to seq_num
-        seq_num = (twh_syn_data_len == 0) ? 0 : seq_num;
-        twh_ack->seq = htons(seq_num);
-        seq_num++;
+        if (twh_ack_data_len == 0) {
+            twh_ack->seq = 0;
+        }
+        else {
+            twh_ack->seq = htons(seq_num);
+            seq_num++;
+        }
         twh_ack->ack = htons(ack_num);
         twh_ack->length = htons(twh_ack_data_len);
         twh_ack->win = htons(MAX_WINDOW);
