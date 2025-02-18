@@ -27,7 +27,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         // Phase 1: Establish SYN
 
         // Create the SYN packet
-        int seq_num = 17; // Anything under 1000 is fine
+        int seq_num = (rand() % 1000) + 1; // Anything under 1000 is fine
         char twh_syn_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet *twh_syn = (packet *)&twh_syn_buf;
         size_t twh_syn_data_len = input_io(twh_syn->payload, MAX_PAYLOAD);
@@ -83,9 +83,13 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         size_t twh_ack_data_len = input_io(twh_ack->payload, MAX_PAYLOAD);
         // See the three way handshake description on the spec
         // Already added one before to seq_num
-        seq_num = (twh_syn_data_len == 0) ? 0 : seq_num;
-        twh_ack->seq = htons(seq_num);
-        seq_num++;
+        if (twh_ack_data_len == 0) {
+            twh_ack->seq = 0;
+        }
+        else {
+            twh_ack->seq = htons(seq_num);
+            seq_num++;
+        }
         twh_ack->ack = htons(ack_num);
         twh_ack->length = htons(twh_ack_data_len);
         twh_ack->win = htons(MAX_WINDOW);
@@ -140,8 +144,7 @@ int listen_loop(int sockfd, struct sockaddr_in *addr, int type,
         // Phase 2: Respond with SYN ACK
 
         // Create the SYN ACK packet
-        int seq_num = 1000; // Anything under 1000 is fine, making it different from client to make
-                            // debugging easier
+        int seq_num = (rand() % 1000) + 1; // Anything under 1000 is fine
         char twh_synack_buf[sizeof(packet) + MAX_PAYLOAD] = {0};
         packet *twh_synack = (packet *)&twh_synack_buf;
         size_t twh_synack_data_len = input_io(twh_synack->payload, MAX_PAYLOAD);
@@ -427,6 +430,6 @@ int normal_loop(int sockfd, struct sockaddr_in *addr, int type,
 
     // This will never happen, but just for good measure here are some frees
     ooo_buffer_destroy(recv_buffer);
-    free(sender_window);
+    destroy_sender_window_queue(sender_window);
     return 0;
 }

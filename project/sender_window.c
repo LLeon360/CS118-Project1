@@ -39,3 +39,10 @@ packet* peek_sender_window(sender_window_queue* q) {
         return NULL;
     return q->head->p;
 }
+
+void destroy_sender_window_queue(sender_window_queue* q) {
+    while (q->head != NULL) {
+        dequeue_sender_window(q);
+    }
+    free(q);
+}
